@@ -120,12 +120,11 @@ class model():
             model = load_model('model_checkpoint.h5')
         else:
             model = Sequential()
-            # model.add(Dense(sine_samples*2, input_dim=sine_samples))
-            # model.add(PReLU())
-            # model.add(Dense(sine_samples//2))
-            # model.add(PReLU())
-            model.add(Dense(sine_samples//8))
+            model.add(Dense(sine_samples//8, input_dim=sine_samples))
             model.add(PReLU())
+            # model.add(Dense(sine_samples*2, input_dim=sine_samples))
+            # model.add(Dense(sine_samples*4))
+            # model.add(PReLU())
             model.add(Dense(number_of_actions))
             model.compile(optimizer=Adam(lr=lr), loss='mse', metrics=['mse'])
         return model
@@ -161,10 +160,10 @@ class model():
                         epochs=8, batch_size=256, verbose=0)
 
         # TODO does the new reward should return to memory?
-        return #dict(validation_mse=h.history['val_mean_squared_error'], mse=h.history['mean_squared_error'])
+        return  # dict(validation_mse=h.history['val_mean_squared_error'], mse=h.history['mean_squared_error'])
 
 
-dont_train=True
+dont_train=False
 if dont_train and len(glob('model_checkpoint.h5')):
     print('model exist, loading it')
     nn=model(sine_samples=99, number_of_actions=6)
@@ -173,7 +172,7 @@ else:
     nn=model(sine_samples=99, number_of_actions=6)
     e=env()
     mem=q(2000000)
-    rounds=2001 # for DC you need 2K, for single tone 4k and for multi tone
+    rounds=4001 # for DC you need 2K, for single tone 4k and for multi tone
 
     def random_new_state_and_action(e):
         e=e[0]
