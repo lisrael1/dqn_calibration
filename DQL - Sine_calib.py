@@ -19,12 +19,14 @@ pd.set_option('display.max_colwidth',1000)
 
 
 class Env():
-    def __init__(self, v_offset_init = np.random.uniform(-0.5, 0.5, 3), t_offset_init = np.random.uniform(-0.0025, 0.0025, 3)):
-        self.num_SARs = v_offset_init.shape[0]
-        self.num_SAR_samples = 33
-        self.v_offset = v_offset_init*0
-        self.t_offset = t_offset_init
-        self.number_of_actions=self.num_SARs*4
+    def __init__(self, v_offset_en = True, t_offset_en = True, num_SARs=3, SAR_samples=33):
+        self.num_SARs = num_SARs
+        self.num_SAR_samples = SAR_samples
+        self.v_offset_en = v_offset_en
+        self.t_offset_en = t_offset_en
+        self.v_offset = np.random.uniform(-0.5, 0.5, 3)*v_offset_en
+        self.t_offset = np.random.uniform(-0.025, 0.025, 3)*t_offset_en
+        self.number_of_actions=self.num_SARs*2*(int(v_offset_en)+int(t_offset_en))
         # self.offset_history=pd.DataFrame([self.offset])
         # self.reward_history=pd.DataFrame()
         self.perfect_sine=pd.DataFrame(np.linspace(0, 1, self.num_SARs*self.num_SAR_samples), columns=['time'])
@@ -33,8 +35,8 @@ class Env():
         self.current_sine, self.current_reward=self.generate_noisy_sine()
 
     def reset_env(self):
-        self.v_offset = np.random.uniform(-0.5, 0.5, 3)*0
-        self.t_offset = np.random.uniform(-0.0025, 0.0025, 3)
+        self.v_offset = np.random.uniform(-0.5, 0.5, 3)*self.v_offset_en
+        self.t_offset = np.random.uniform(-0.025, 0.025, 3)*self.t_offset_en
         self.current_sine, self.current_reward=self.generate_noisy_sine()
 
     def generate_noisy_sine(self):
@@ -46,31 +48,36 @@ class Env():
         # plt.plot(np.arange(0,99,3), noisy_sine[::3])
         # plt.plot(np.arange(1,99,3), noisy_sine[1::3])
         # plt.plot(np.arange(2,99,3), noisy_sine[2::3])
-        # plt.plot(noisy_sine)
+        # plt.plot(noisy_sine,'b')
+        # plt.plot(self.perfect_sine.value.values,'g')
         # plt.grid()
         # plt.show()
         # phase=np.random.uniform(1, 2*np.pi)
         new_mse = np.mean((noisy_sine - self.perfect_sine.value.values)**2)
-        reward = 100*((self.mse - new_mse)/self.mse)
+        reward = np.clip(1000*((self.mse - new_mse)/self.mse), -1, 1)
+        # reward = np.sign((self.mse - new_mse)/self.mse)
         self.mse = new_mse
         return noisy_sine, reward
 
     def get_reward_and_next_state_by_action(self, action_number):
         # Actions: SAR1: v_up, v_dn, t_up, t_dn, SAR2:...
-        SAR=action_number//4
-        action_in_sar={0:'v_up',1:'v_dn',2:'t_up',3:'t_dn'}[action_number % 4]
+        SAR=int(action_number//(self.number_of_actions/self.num_SARs))
+        if (self.v_offset_en and not self.t_offset_en): action_in_sar={0:'v_up',1:'v_dn'}[action_number % 2]
+        elif (not self.v_offset_en and self.t_offset_en): action_in_sar = {0: 't_up', 1: 't_dn'}[action_number % 2]
+        else: action_in_sar={0:'v_up',1:'v_dn',2:'t_up',3:'t_dn'}[action_number % 4]
         if action_in_sar.startswith("v"):
             if action_in_sar.endswith("up"):
                 self.v_offset[SAR] += 0.02
             else: self.v_offset[SAR] -= 0.02
         else:
             if action_in_sar.endswith("up"):
-                self.t_offset[SAR] += 0.0001
-            else: self.t_offset[SAR] -= 0.0001
+                self.t_offset[SAR] += 0.0025
+            else: self.t_offset[SAR] -= 0.0025
 
-        # self.v_offset = np.clip(self.v_offset, -0.5, 0.5)
-        self.v_offset = np.clip(self.v_offset, 0, 0)
-        self.t_offset = np.clip(self.t_offset, -0.0025, 0.0025)
+        self.v_offset = np.clip(self.v_offset, -0.5, 0.5)
+        # self.v_offset = np.clip(self.v_offset, 0, 0)
+        self.t_offset = np.clip(self.t_offset, -0.025, 0.025)
+        # self.t_offset = np.clip(self.t_offset, 0, 0)
 
         self.current_sine, self.current_reward = self.generate_noisy_sine()
         # self.offset_history=self.offset_history.append([self.offset])
@@ -122,12 +129,12 @@ class Model():
             model = load_model('model_checkpoint.h5')
         else:
             model = Sequential()
-            model.add(Dense(sine_samples, input_dim=sine_samples, activation='relu'))
-            # model.add(Dense(sine_samples, activation='relu'))
-            # model.add(Dense(sine_samples//2, activation='relu'))
-            model.add(Dense(sine_samples // 2, activation='relu'))
-            model.add(Dense(sine_samples // 4, activation='relu'))
-            model.add(Dense(sine_samples//8, activation='relu'))
+            model.add(Dense(sine_samples, input_dim=sine_samples, activation='tanh'))
+            # model.add(Dense(sine_samples, activation='tanh'))
+            model.add(Dense(sine_samples//2, activation='tanh'))
+            model.add(Dense(sine_samples // 2, activation='tanh'))
+            model.add(Dense(sine_samples // 4, activation='tanh'))
+            model.add(Dense(sine_samples//8, activation='tanh'))
             model.add(Dense(number_of_actions, activation=None))
             model.compile(optimizer=Adam(lr=lr), loss='mse', metrics=['mse'])
         return model
@@ -155,14 +162,15 @@ if __name__ == '__main__':
         model = Model(sine_samples=None, number_of_actions=None)
     else:
         adc = Env()
-        model = Model(sine_samples=adc.num_SARs*adc.num_SAR_samples, number_of_actions=adc.num_SARs*4)
-
-        mem=Memory(memory_size=100)
+        model = Model(sine_samples=adc.num_SARs*adc.num_SAR_samples, number_of_actions=adc.number_of_actions)
+        mem=Memory(memory_size=500)
         # rounds=200000 # for DC you need 2K, for single tone 4k and for multi tone
         epsilon = 0.7
         avg_reward = 0
         count = 0
         i=0
+        v_os_hist = [[], [], []]
+        t_os_hist = [[],[],[]]
         while(True):
             if (i+1)%20000 == 0:
                 adc.reset_env()
@@ -181,13 +189,15 @@ if __name__ == '__main__':
             q_s_next = model.nn.predict(new_sine.reshape((1, -1)))[0]
             q_s[action] = reward + 0.5*np.amax(q_s_next)
             # if reward/np.amax(q_s_next) < 0.01: count+=1
+            # plt.plot(new_sine-current_sine); plt.show()
             mem.remember(current_sine, q_s)
             if (i+1) % 100 == 0:
                 X, Y = model.generate_nn_data(mem.get_data(100))
                 model.train_model(X, Y)
             if i % 1000 == 0:
-                print("round {i}, rmse={mse}\n\tv offset = {v_ofst}\n\tt offset={t_ofst}\n\taverage reward={avg}\n".format(i=i, mse=np.sqrt(adc.mse), v_ofst=(adc.v_offset/0.02).astype(int), t_ofst=(adc.t_offset/0.0001).astype(int), avg=avg_reward/1000))
+                print("round {i}, rmse={mse}\n\tv offset = {v_ofst}\n\tt offset={t_ofst}\n\taverage reward={avg}\n".format(i=i, mse=np.sqrt(adc.mse), v_ofst=(adc.v_offset/0.02).astype(int), t_ofst=(adc.t_offset/0.0025).astype(int), avg=avg_reward/1000))
                 avg_reward = 0
+
             i+=1
             if i==200000: break
             # if i % 100 == 0 and i and 0:
