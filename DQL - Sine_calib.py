@@ -1,6 +1,6 @@
 from __future__ import print_function
 from keras.models import Sequential
-from keras.layers import Conv1D, MaxPooling1D
+from keras.layers import Conv1D, MaxPooling1D, Flatten
 from keras.layers.core import Dense, Activation
 from keras.optimizers import SGD , Adam, RMSprop
 from keras.layers.advanced_activations import PReLU
@@ -17,6 +17,9 @@ pd.set_option('expand_frame_repr',False) # for not wrapping columns if you have 
 pd.set_option("display.max_rows",10)
 pd.set_option('display.max_colwidth',1000)
 
+V_STEP = 0.02
+T_STEP = 0.0025
+
 
 class Env():
     def __init__(self, v_offset_en = True, t_offset_en = True, num_SARs=3, SAR_samples=33):
@@ -24,26 +27,25 @@ class Env():
         self.num_SAR_samples = SAR_samples
         self.v_offset_en = v_offset_en
         self.t_offset_en = t_offset_en
-        self.v_offset = np.random.uniform(-0.5, 0.5, 3)*v_offset_en
-        self.t_offset = np.random.uniform(-0.025, 0.025, 3)*t_offset_en
+        self.v_offset = np.random.randint(-25, 25, 3)*v_offset_en
+        self.t_offset = np.random.randint(-10, 10, 3)*t_offset_en
         self.number_of_actions=self.num_SARs*2*(int(v_offset_en)+int(t_offset_en))
-        # self.offset_history=pd.DataFrame([self.offset])
-        # self.reward_history=pd.DataFrame()
         self.perfect_sine=pd.DataFrame(np.linspace(0, 1, self.num_SARs*self.num_SAR_samples), columns=['time'])
-        self.perfect_sine['value']=np.sin(2 * np.pi * self.perfect_sine.time.values)
         self.mse=0
         self.current_sine, self.current_reward=self.generate_noisy_sine()
 
     def reset_env(self):
-        self.v_offset = np.random.uniform(-0.5, 0.5, 3)*self.v_offset_en
-        self.t_offset = np.random.uniform(-0.025, 0.025, 3)*self.t_offset_en
+        self.v_offset = np.random.randint(-25, 25, 3)*self.v_offset_en
+        self.t_offset = np.random.randint(-10, 10, 3)*self.t_offset_en
         self.current_sine, self.current_reward=self.generate_noisy_sine()
 
     def generate_noisy_sine(self):
+        phase = np.random.uniform(0, 2*np.pi)*0
         time_vals = self.perfect_sine.time.values
-        time_offsets = np.asarray(list(self.t_offset) * self.num_SAR_samples)
-        sine_with_time_offsets = np.sin(2 * np.pi * (time_vals+time_offsets))
-        v_offset = np.asarray(list(self.v_offset) * self.num_SAR_samples)
+        self.perfect_sine['value'] = np.sin(2 * np.pi * self.perfect_sine.time.values + phase)
+        time_offsets = np.asarray(list(self.t_offset*T_STEP) * self.num_SAR_samples)
+        sine_with_time_offsets = np.sin(2 * np.pi * (time_vals+time_offsets) + phase)
+        v_offset = np.asarray(list(self.v_offset*V_STEP) * self.num_SAR_samples)
         noisy_sine = sine_with_time_offsets + v_offset
         # plt.plot(np.arange(0,99,3), noisy_sine[::3])
         # plt.plot(np.arange(1,99,3), noisy_sine[1::3])
@@ -52,11 +54,10 @@ class Env():
         # plt.plot(self.perfect_sine.value.values,'g')
         # plt.grid()
         # plt.show()
-        # phase=np.random.uniform(1, 2*np.pi)
         new_mse = np.mean((noisy_sine - self.perfect_sine.value.values)**2)
         reward = np.clip(1000*((self.mse - new_mse)/self.mse), -1, 1)
-        # reward = np.sign((self.mse - new_mse)/self.mse)
         self.mse = new_mse
+        self.generate_codes_df()
         return noisy_sine, reward
 
     def get_reward_and_next_state_by_action(self, action_number):
@@ -67,40 +68,29 @@ class Env():
         else: action_in_sar={0:'v_up',1:'v_dn',2:'t_up',3:'t_dn'}[action_number % 4]
         if action_in_sar.startswith("v"):
             if action_in_sar.endswith("up"):
-                self.v_offset[SAR] += 0.02
-            else: self.v_offset[SAR] -= 0.02
+                self.v_offset[SAR] += 1
+            else: self.v_offset[SAR] -= 1
         else:
             if action_in_sar.endswith("up"):
-                self.t_offset[SAR] += 0.0025
-            else: self.t_offset[SAR] -= 0.0025
+                self.t_offset[SAR] += 1
+            else: self.t_offset[SAR] -= 1
 
-        self.v_offset = np.clip(self.v_offset, -0.5, 0.5)
-        # self.v_offset = np.clip(self.v_offset, 0, 0)
-        self.t_offset = np.clip(self.t_offset, -0.025, 0.025)
-        # self.t_offset = np.clip(self.t_offset, 0, 0)
+        self.v_offset = np.clip(self.v_offset, -25, 25)
+        self.t_offset = np.clip(self.t_offset, -10, 10)
 
         self.current_sine, self.current_reward = self.generate_noisy_sine()
-        # self.offset_history=self.offset_history.append([self.offset])
-        # self.reward_history=self.reward_history.append([self.current_reward])
         return self.current_sine, self.current_reward
 
 
     def random_action(self):
         return np.random.randint(self.number_of_actions)
 
-
-    # def plot_history(self):
-    #     import pylab as plt
-    #     fig, ax = plt.subplots(5, 1)
-    #     self.offset_history.reset_index(drop=True).plot(ax=ax[0], grid=True, title='current offset (need to be zeroes)')
-    #     self.reward_history.reset_index(drop=True).plot(ax=ax[1], grid=True, title='reward history')
-    #     pd.DataFrame(self.current_sine, index=self.perfect_sine.time).plot(ax=ax[2], grid=True, title='sine')  # title='current offset {}, original offset {}'.format(e.offset, e.original_offset))
-    #     history = pd.read_csv('history_adc_output_estimator.csv', index_col=None)
-    #     history.mean_squared_error.dropna().plot(ax=ax[3], title='training mse')
-    #     history.val_mean_squared_error.dropna().plot(ax=ax[4], title='validation mse')
-    #     # nn.action_values_history.reset_index(drop=True).plot(ax=ax[4], grid=True, title='action values history')
-    #     # nn.action_values_history.idxmax(axis=1).reset_index(drop=True).plot(ax=ax[5], grid=True, title='chosen action history')
-    #     plt.show()
+    def generate_codes_df(self):
+        self.codes_df = pd.DataFrame()
+        self.codes_df["v_offset"] = self.v_offset
+        self.codes_df["t_offset"] = self.t_offset
+        self.codes_df.index.name = "SAR#"
+        return
 
 
 class Memory:
@@ -122,25 +112,36 @@ class Memory:
 class Model():
     def __init__(self, sine_samples, number_of_actions):
         self.nn=self.build_model(sine_samples, number_of_actions)
-        # self.action_values_history=pd.DataFrame()
 
     def build_model(self, sine_samples, number_of_actions, lr=0.001):
         if len(glob('model_checkpoint.h5')):
             model = load_model('model_checkpoint.h5')
         else:
             model = Sequential()
-            model.add(Dense(sine_samples, input_dim=sine_samples, activation='tanh'))
-            # model.add(Dense(sine_samples, activation='tanh'))
-            model.add(Dense(sine_samples//2, activation='tanh'))
-            model.add(Dense(sine_samples // 2, activation='tanh'))
-            model.add(Dense(sine_samples // 4, activation='tanh'))
-            model.add(Dense(sine_samples//8, activation='tanh'))
+            # # Fully connected
+            # model.add(Dense(sine_samples, input_dim=sine_samples, activation='tanh'))
+            # model.add(Dense(sine_samples//2, activation='tanh'))
+            # model.add(Dense(sine_samples // 2, activation='tanh'))
+            # model.add(Dense(sine_samples // 4, activation='tanh'))
+            # model.add(Dense(sine_samples//8, activation='tanh'))
+
+            # Conv net
+            model.add(Conv1D(64, kernel_size=9, activation='tanh', input_shape=(sine_samples,1)))
+            model.add(Conv1D(16, kernel_size=9, activation='tanh'))
+            # model.add(MaxPooling1D(pool_size=2))
+            model.add(Conv1D(4, kernel_size=9, activation='tanh'))
+            # model.add(MaxPooling1D(pool_size=2))
+            model.add(Conv1D(1, kernel_size=9, activation='tanh'))
+            model.add(Flatten())
+            model.add(Dense(50, activation='tanh'))
+            model.add(Dense(25, activation='tanh'))
             model.add(Dense(number_of_actions, activation=None))
             model.compile(optimizer=Adam(lr=lr), loss='mse', metrics=['mse'])
         return model
 
     def generate_nn_data(self, memory):
         current_state = memory.old_sine.apply(pd.Series).values
+        current_state = np.expand_dims(current_state, axis=2)
         q_s = memory.q_s.apply(pd.Series).values
         data = (current_state, q_s)
         return data
@@ -149,7 +150,7 @@ class Model():
     def train_model(self, X, Y):
         reduce_lr = ReduceLROnPlateau(monitor='mean_squared_error', factor=0.6, patience=10, verbose=0, mode='auto', min_delta=0.0001, cooldown=0, min_lr=0)
         hist = CSVLogger('history_adc_output_estimator.csv', separator=',', append=True)
-        self.nn.fit(X, Y, batch_size=10, epochs=1, verbose=0, callbacks=[reduce_lr, hist])
+        self.nn.fit(X, Y, batch_size=10, epochs=3, verbose=0, callbacks=[reduce_lr, hist])
         return
 
 
@@ -164,52 +165,51 @@ if __name__ == '__main__':
         adc = Env()
         model = Model(sine_samples=adc.num_SARs*adc.num_SAR_samples, number_of_actions=adc.number_of_actions)
         mem=Memory(memory_size=500)
-        # rounds=200000 # for DC you need 2K, for single tone 4k and for multi tone
+        max_rounds = 200000
         epsilon = 0.7
         avg_reward = 0
-        count = 0
         i=0
         v_os_hist = [[], [], []]
         t_os_hist = [[],[],[]]
+        fig, [ax1, ax2, ax3] = plt.subplots(3, 1, figsize=(10, 6))
+        plt.ion()
+        plt.show()
+        sample_num = 1
         while(True):
-            if (i+1)%20000 == 0:
+            if (i+1)%10000 == 0:
                 adc.reset_env()
                 print("New sample")
+                sample_num += 1
             current_sine = adc.current_sine
-            if (i+1) % 40000 == 0:
+            if (i+1) % 10000 == 0:
                 epsilon = epsilon / 2
                 print("epsilon="+str(epsilon))
-            q_s = model.nn.predict(current_sine.reshape((1, -1)))[0]
+            q_s = model.nn.predict(current_sine.reshape((1, -1, 1)))[0]
             if np.random.uniform(0, 1) > epsilon:
                 action = np.argmax(q_s)
             else:
                 action = adc.random_action()
             new_sine, reward = adc.get_reward_and_next_state_by_action(action)
             avg_reward += reward
-            q_s_next = model.nn.predict(new_sine.reshape((1, -1)))[0]
+            q_s_next = model.nn.predict(new_sine.reshape((1, -1, 1)))[0]
             q_s[action] = reward + 0.5*np.amax(q_s_next)
-            # if reward/np.amax(q_s_next) < 0.01: count+=1
             # plt.plot(new_sine-current_sine); plt.show()
             mem.remember(current_sine, q_s)
             if (i+1) % 100 == 0:
                 X, Y = model.generate_nn_data(mem.get_data(100))
                 model.train_model(X, Y)
-            if i % 1000 == 0:
-                print("round {i}, rmse={mse}\n\tv offset = {v_ofst}\n\tt offset={t_ofst}\n\taverage reward={avg}\n".format(i=i, mse=np.sqrt(adc.mse), v_ofst=(adc.v_offset/0.02).astype(int), t_ofst=(adc.t_offset/0.0025).astype(int), avg=avg_reward/1000))
+            if i % 100 == 0:
+                print("round {i}, rmse={mse}\n\tv offset = {v_ofst}\n\tt offset={t_ofst}\n\taverage reward={avg}\n".format(i=i, mse=np.sqrt(adc.mse), v_ofst=(adc.v_offset).astype(int), t_ofst=(adc.t_offset).astype(int), avg=avg_reward/100))
+                ax1.clear(); ax2.clear(); ax3.clear()
+                ax1.axis([0, 1, -25, 25])
+                adc.codes_df.T.plot.bar(rot=0, ax=ax1)
+                ax1.grid(True)
+                ax2.plot(adc.current_sine)
+                state = 'Round = {round}\nSample Number = {sample_num}\nRMSE[mv] = {rmse}\nAverage Reward = {reward:{p}}\n'.format(p='3f',round=i, sample_num=sample_num, reward=avg_reward/100, rmse=1e3 * np.sqrt(adc.mse))
+                ax3.text(x=0.2, y=0.25, s=state, family='monospace')
+                plt.draw()  # or plt.show(block=False)
+                plt.pause(0.0001)
                 avg_reward = 0
+            i += 1
+            if i == max_rounds: break
 
-            i+=1
-            if i==200000: break
-            # if i % 100 == 0 and i and 0:
-            #     e.plot_history()
-
-    # print('starting playing')
-    # random_offset_for_random_state=np.random.normal(0, 0.9, 3)
-    # play=env(random_offset_for_random_state)
-    # nn_reward=[]
-    # for _ in range(2000):
-    #     action=nn.nn.predict(play.current_sine.reshape((1, -1)))
-    #     nn_reward += [np.max(action)]
-    #     play.get_reward_and_next_step_by_action(np.argmax(action))
-    # pd.DataFrame(nn_reward).plot(title='what nn though the reward was')
-    # play.plot_history()
